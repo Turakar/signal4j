@@ -52,6 +52,12 @@ public class JsonSignalStore extends SignalStore {
 	private String url;
 	@JsonProperty
 	private int deviceId;
+	@JsonProperty
+	private PreKeyRecord lastResortPreKey;
+	@JsonProperty
+	private int nextPreKeyId;
+	@JsonProperty
+	private int nextSignedPreKeyId;
 
 	@JsonProperty
 	private HashMap<String, IdentityKey> identities = new HashMap<>();
@@ -145,7 +151,7 @@ public class JsonSignalStore extends SignalStore {
 
 	@Override
 	@JsonIgnore
-	public SessionRecord loadSession(SignalProtocolAddress address) {
+	public SessionRecord getSession(SignalProtocolAddress address) {
 		return sessions.get(address);
 	}
 	
@@ -253,6 +259,30 @@ public class JsonSignalStore extends SignalStore {
 
 	public void setLocalRegistrationId(int registrationId) {
 		this.registrationId = registrationId;
+	}
+
+	public PreKeyRecord getLastResortPreKey() {
+		return lastResortPreKey;
+	}
+
+	public void setLastResortPreKey(PreKeyRecord lastResortPreKey) {
+		this.lastResortPreKey = lastResortPreKey;
+	}
+
+	public int getNextPreKeyId() {
+		return nextPreKeyId;
+	}
+
+	public void setNextPreKeyId(int nextPreKeyId) {
+		this.nextPreKeyId = nextPreKeyId;
+	}
+
+	public int getNextSignedPreKeyId() {
+		return nextSignedPreKeyId;
+	}
+
+	public void setNextSignedPreKeyId(int nextSignedPreKeyId) {
+		this.nextSignedPreKeyId = nextSignedPreKeyId;
 	}
 
 }

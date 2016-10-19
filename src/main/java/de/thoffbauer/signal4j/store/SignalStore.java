@@ -50,4 +50,14 @@ public abstract class SignalStore implements SignalProtocolStore {
 		}
 	}
 	
+	public abstract SessionRecord getSession(SignalProtocolAddress address);
+	
+	@Override
+	public SessionRecord loadSession(SignalProtocolAddress address) {
+		SessionRecord session = getSession(address);
+		if(session == null) {
+			session = new SessionRecord();
+		}
+		return session;
+	}
 }

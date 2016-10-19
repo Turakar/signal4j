@@ -23,7 +23,11 @@ import org.whispersystems.libsignal.InvalidMessageException;
 import org.whispersystems.libsignal.InvalidVersionException;
 import org.whispersystems.libsignal.LegacyMessageException;
 import org.whispersystems.libsignal.NoSessionException;
+import org.whispersystems.libsignal.ecc.Curve;
+import org.whispersystems.libsignal.state.PreKeyRecord;
+import org.whispersystems.libsignal.state.SignedPreKeyRecord;
 import org.whispersystems.libsignal.util.KeyHelper;
+import org.whispersystems.libsignal.util.Medium;
 import org.whispersystems.libsignal.util.guava.Optional;
 import org.whispersystems.signalservice.api.SignalServiceAccountManager;
 import org.whispersystems.signalservice.api.SignalServiceAccountManager.NewDeviceRegistrationReturn;
@@ -59,11 +63,20 @@ import de.thoffbauer.signal4j.util.SecretUtil;
 
 public class SignalService {
 	
+	/**
+	 * Path to main store file. Contains all keys etc.
+	 */
 	public static String STORE_PATH = "store.json";
+	/**
+	 * Folder to save attachments to
+	 */
 	public static String ATTACHMENTS_PATH = "attachments";
+	
 	private static final int PASSWORD_LENGTH = 18;
 	private static final int SIGNALING_KEY_LENGTH = 52;
 	private static final int MAX_REGISTRATION_ID = 8192;
+	private static final int PREKEYS_BATCH_SIZE = 100;
+	private static final int MAX_PREKEY_ID = Medium.MAX_VALUE;
 	
 	private final TrustStore trustStore = new WhisperTrustStore();
 	
@@ -78,6 +91,10 @@ public class SignalService {
 	private ArrayList<DataMessageListener> dataMessageListeners = new ArrayList<>();
 	private ArrayList<SyncMessageListener> syncMessageListeners = new ArrayList<>();
 	
+	/**
+	 * Create a new instance. Will automatically load a store file if existent.
+	 * @throws IOException can be thrown while loading the store
+	 */
 	public SignalService() throws IOException {
 		// Add bouncycastle
 		Security.insertProviderAt(new org.bouncycastle.jce.provider.BouncyCastleProvider(), 1);
@@ -92,6 +109,14 @@ public class SignalService {
 		}
 	}
 	
+	/**
+	 * Starts the connection and registration as the primary device. This creates a new Signal account with this number.
+	 * @param url the url of the signal server
+	 * @param userAgent human-readable name of the user agent
+	 * @param phoneNumber the user's phone number
+	 * @param voice whether to call (true) or to message (false) for verification
+	 * @throws IOException
+	 */
 	public void startConnectAsPrimary(String url, String userAgent, String phoneNumber, boolean voice) throws IOException {
 		if(accountManager != null) {
 			throw new IllegalStateException("Already started a connection!");
@@ -110,10 +135,15 @@ public class SignalService {
 		}
 	}
 	
+	/**
+	 * Finish the connection and registration as primary device with the received verification code
+	 * @param verificationCode the verification code without the -
+	 * @throws IOException
+	 */
 	public void finishConnectAsPrimary(String verificationCode) throws IOException {
 		if(accountManager == null) {
 			throw new IllegalStateException("Cannot finish: No connection started!");
-		} else if(store.getIdentityKeyPair() != null) {
+		} else if(isRegistered()) {
 			throw new IllegalStateException("Already registered!");
 		}
 		createRegistrationId();
@@ -121,8 +151,20 @@ public class SignalService {
 				store.getLocalRegistrationId(), false);
 		IdentityKeyPair identityKeyPair = KeyHelper.generateIdentityKeyPair();
 		store.setIdentityKeyPair(identityKeyPair);
+		store.setLastResortPreKey(KeyHelper.generateLastResortPreKey());
+		checkPreKeys(-1);
+		save();
 	}
 	
+	/**
+	 * Start connection and registration as secondary device. The device will be linked with the device scanning accepting the code.
+	 * @param url the url of the signal server
+	 * @param userAgent human-readable name of the user agent
+	 * @param phoneNumber the user's phone number
+	 * @return a url which must be shown as a QR code to the android app for provisioning
+	 * @throws IOException
+	 * @throws TimeoutException
+	 */
 	public String startConnectAsSecondary(String url, String userAgent, String phoneNumber) throws IOException, TimeoutException {
 		if(accountManager != null) {
 			throw new IllegalStateException("Already started a connection!");
@@ -145,7 +187,20 @@ public class SignalService {
 		return qrString;
 	}
 	
+	/**
+	 * Blocking call. Call this directly after {@code startConnectAsSecondary()} and this method will wait
+	 * for the master device accepting this device.
+	 * @param deviceName a name for this device (not the user agent)
+	 * @param supportsSms whether this device can receive and send SMS
+	 * @throws IOException
+	 * @throws TimeoutException
+	 */
 	public void finishConnectAsSecondary(String deviceName, boolean supportsSms) throws IOException, TimeoutException {
+		if(accountManager == null) {
+			throw new IllegalStateException("Cannot finish: No connection started!");
+		} else if(isRegistered()) {
+			throw new IllegalStateException("Already registered!");
+		}
 		try {
 			NewDeviceRegistrationReturn ret = accountManager.finishNewDeviceRegistration(tempIdentity,
 					store.getSignalingKey(), supportsSms, true, store.getLocalRegistrationId(), deviceName);
@@ -154,14 +209,30 @@ public class SignalService {
 		} catch (InvalidKeyException e) {
 			throw new RuntimeException("This can not happen - theoretically", e);
 		}
+		store.setLastResortPreKey(KeyHelper.generateLastResortPreKey());
+		checkPreKeys(-1);
+		save();
 	}
 
+	/**
+	 * Send a data, i.e. "normal" message
+	 * @param address
+	 * @param message
+	 * @throws UntrustedIdentityException
+	 * @throws IOException
+	 */
 	public void sendMessage(SignalServiceAddress address, SignalServiceDataMessage message) throws UntrustedIdentityException, IOException {
 		checkRegistered();
 		checkMessageSender();
 		messageSender.sendMessage(address, message);
 	}
 	
+	/**
+	 * Request sync messages from primary device. They are received using the listeners
+	 * @param types
+	 * @throws IOException
+	 * @throws UntrustedIdentityException
+	 */
 	public void requestSync(Request.Type... types) throws IOException, UntrustedIdentityException {
 		checkRegistered();
 		checkMessageSender();
@@ -181,13 +252,18 @@ public class SignalService {
 	}
 	
 	private void checkRegistered() {
-		if(isRegistered()) {
+		if(!isRegistered()) {
 			throw new IllegalStateException("Not registered!");
 		}
 	}
 
+	/**
+	 * Returns true if this device is registered. This does not necessarily 
+	 * mean that no other device has registered with this number.
+	 * @return whether this device is registered
+	 */
 	public boolean isRegistered() {
-		return store.getIdentityKeyPair() == null;
+		return store.getIdentityKeyPair() != null;
 	}
 	
 	private void createPasswords() {
@@ -202,28 +278,50 @@ public class SignalService {
 		store.setLocalRegistrationId(registrationId);
 	}
 	
-	public void quit() throws IOException {
+	private void save() throws IOException {
 		store.save(new File(STORE_PATH));
 	}
 
-	
+	/**
+	 * Add a listener for data, i.e. "normal" messages.
+	 * The listener may be executed if a message arrives during {@code pull()}
+	 * @param listener
+	 */
 	public void addDataMessageListener(DataMessageListener listener) {
 		dataMessageListeners.add(listener);
 	}
 	
-
+	/**
+	 * Remove a data message listener
+	 * @param listener
+	 */
 	public void removeDataMessageListener(DataMessageListener listener) {
 		dataMessageListeners.remove(listener);
 	}
 	
+	/**
+	 * Add a listener for sync messages which are sent by the primary device.
+	 * The listener may be executed if a message arrives during {@code pull()}
+	 * @param listener
+	 */
 	public void addSyncMessageListener(SyncMessageListener listener) {
 		syncMessageListeners.add(listener);
 	}
 	
+	/**
+	 * Remove a sync message listener
+	 * @param listener
+	 */
 	public void removeSyncMessageListener(SyncMessageListener listener) {
 		syncMessageListeners.remove(listener);
 	}
 	
+	/**
+	 * Wait for incoming messages. This method returns silently if the timeout passes.
+	 * If a message arrives, the corresponding listeners are called and the method returns.
+	 * @param timeoutMillis time to wait for messages
+	 * @throws IOException
+	 */
 	public void pull(int timeoutMillis) throws IOException {
 		checkRegistered();
 		if(messagePipe == null) {
@@ -262,6 +360,7 @@ public class SignalService {
 						} catch(IOException e) {
 							// we have to assume that we have an EOF here
 						}
+						file.delete();
 						for(SyncMessageListener listener : syncMessageListeners) {
 							listener.onContactsSync(contacts);
 						}
@@ -276,10 +375,11 @@ public class SignalService {
 						} catch(IOException e) {
 							// we have to assume that we have an EOF here
 						}
+						file.delete();
 						for (SyncMessageListener listener : syncMessageListeners) {
 							listener.onGroupsSync(groups);
 						}
-					} else if(syncMessage.getBlockedList().isPresent()) {
+					} else if(syncMessage.getBlockedList().isPresent()) { // TODO: seems not to be working
 						BlockedListMessage blockedMessage = syncMessage.getBlockedList().get();
 						for (SyncMessageListener syncMessageListener : syncMessageListeners) {
 							syncMessageListener.onBlockedSync(blockedMessage.getNumbers());
@@ -304,14 +404,57 @@ public class SignalService {
 		
 	}
 	
+	/**
+	 * Ensures that there are enough prekeys available. Has to be called regularly.<br>
+	 * Every time somebody sends you message, he uses one of your prekeys which you have uploaded earlier.
+	 * To always have one prekey available, you also upload a last resort key. You should always
+	 * have enough prekeys to prevent key reusing.
+	 * @param minimumKeys the minimum amount of keys to register. Must be below 100.
+	 * @throws IOException
+	 */
 	public void checkPreKeys(int minimumKeys) throws IOException {
+		if(minimumKeys > PREKEYS_BATCH_SIZE) {
+			throw new IllegalArgumentException("PreKeys count must be below or equal to " + PREKEYS_BATCH_SIZE);
+		}
 		checkRegistered();
 		int preKeysCount = accountManager.getPreKeysCount();
-		if(preKeysCount < minimumKeys) {
-			
+		if(preKeysCount < minimumKeys || minimumKeys < 0) {
+			try {
+				// generate prekeys
+				int nextPreKeyId = store.getNextPreKeyId();
+				ArrayList<PreKeyRecord> preKeys = new ArrayList<>();
+				for(int i = 0; i < PREKEYS_BATCH_SIZE; i++) {
+		            PreKeyRecord record = new PreKeyRecord(nextPreKeyId, Curve.generateKeyPair());
+		            store.storePreKey(record.getId(), record);
+		            preKeys.add(record);
+					nextPreKeyId = (nextPreKeyId + 1) % MAX_PREKEY_ID;
+				}
+				store.setNextPreKeyId(nextPreKeyId);
+				
+				// generate signed prekey
+				int nextSignedPreKeyId = store.getNextSignedPreKeyId();
+				SignedPreKeyRecord signedPreKey = KeyHelper.generateSignedPreKey(store.getIdentityKeyPair(), nextSignedPreKeyId);
+				store.storeSignedPreKey(signedPreKey.getId(), signedPreKey);
+				store.setNextSignedPreKeyId((nextSignedPreKeyId + 1) % MAX_PREKEY_ID);
+				
+				// upload
+				accountManager.setPreKeys(store.getIdentityKeyPair().getPublicKey(), store.getLastResortPreKey(), 
+						signedPreKey, preKeys);
+			} catch (InvalidKeyException e) {
+				throw new RuntimeException("Stored identity corrupt!", e);
+			}
+			save();
 		}
 	}
 	
+	/**
+	 * Save an attachment to the attachments folder specified by {@code ATTACHMENTS_PATH}.
+	 * The file name is chosen automatically based on the attachment id.
+	 * @param attachment the attachment to download
+	 * @param progressListener an optional download progress listener
+	 * @return the file descriptor for the downloaded attachment
+	 * @throws IOException
+	 */
 	public File saveAttachment(SignalServiceAttachment attachment, ProgressListener progressListener)
 			throws IOException {
 		File attachmentsDir = new File(ATTACHMENTS_PATH);
