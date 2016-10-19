@@ -18,6 +18,7 @@ import org.whispersystems.libsignal.state.SignedPreKeyRecord;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 
 import de.thoffbauer.signal4j.store.serialize.IdentityKeyDeserializer;
@@ -84,6 +85,7 @@ public class JsonSignalStore extends SignalStore {
 		module.addKeySerializer(SignalProtocolAddress.class, new SignalProtocolAddressSerializer());
 		ObjectMapper mapper = new ObjectMapper();
 		mapper.registerModule(module);
+		mapper.enable(SerializationFeature.INDENT_OUTPUT);
 		mapper.writeValue(file, this);
 	}
 	

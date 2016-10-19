@@ -14,6 +14,6 @@ public interface SyncMessageListener {
 	void onGroupsSync(List<DeviceGroup> groupList);
 	void onTranscriptSync(SentTranscriptMessage transcript);
 	void onReadSync(List<ReadMessage> readList);
-	void onBlockedSync(List<BlockedListMessage> blockedList);
+	void onBlockedSync(List<String> blockedList);
 
 }

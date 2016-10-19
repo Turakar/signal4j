@@ -1,27 +1,57 @@
 package de.thoffbauer.signal4j;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URLEncoder;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.Security;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.whispersystems.libsignal.DuplicateMessageException;
 import org.whispersystems.libsignal.IdentityKeyPair;
 import org.whispersystems.libsignal.InvalidKeyException;
+import org.whispersystems.libsignal.InvalidKeyIdException;
+import org.whispersystems.libsignal.InvalidMessageException;
+import org.whispersystems.libsignal.InvalidVersionException;
+import org.whispersystems.libsignal.LegacyMessageException;
+import org.whispersystems.libsignal.NoSessionException;
 import org.whispersystems.libsignal.util.KeyHelper;
 import org.whispersystems.libsignal.util.guava.Optional;
 import org.whispersystems.signalservice.api.SignalServiceAccountManager;
 import org.whispersystems.signalservice.api.SignalServiceAccountManager.NewDeviceRegistrationReturn;
+import org.whispersystems.signalservice.api.SignalServiceMessagePipe;
+import org.whispersystems.signalservice.api.SignalServiceMessageReceiver;
 import org.whispersystems.signalservice.api.SignalServiceMessageSender;
+import org.whispersystems.signalservice.api.crypto.SignalServiceCipher;
 import org.whispersystems.signalservice.api.crypto.UntrustedIdentityException;
+import org.whispersystems.signalservice.api.messages.SignalServiceAttachment;
+import org.whispersystems.signalservice.api.messages.SignalServiceAttachment.ProgressListener;
+import org.whispersystems.signalservice.api.messages.SignalServiceContent;
 import org.whispersystems.signalservice.api.messages.SignalServiceDataMessage;
+import org.whispersystems.signalservice.api.messages.SignalServiceEnvelope;
+import org.whispersystems.signalservice.api.messages.multidevice.BlockedListMessage;
+import org.whispersystems.signalservice.api.messages.multidevice.DeviceContact;
+import org.whispersystems.signalservice.api.messages.multidevice.DeviceContactsInputStream;
+import org.whispersystems.signalservice.api.messages.multidevice.DeviceGroup;
+import org.whispersystems.signalservice.api.messages.multidevice.DeviceGroupsInputStream;
+import org.whispersystems.signalservice.api.messages.multidevice.ReadMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.RequestMessage;
+import org.whispersystems.signalservice.api.messages.multidevice.SentTranscriptMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.SignalServiceSyncMessage;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 import org.whispersystems.signalservice.api.push.TrustStore;
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Request;
 
+import de.thoffbauer.signal4j.listener.DataMessageListener;
+import de.thoffbauer.signal4j.listener.SyncMessageListener;
 import de.thoffbauer.signal4j.store.JsonSignalStore;
 import de.thoffbauer.signal4j.store.WhisperTrustStore;
 import de.thoffbauer.signal4j.util.Base64;
@@ -29,7 +59,8 @@ import de.thoffbauer.signal4j.util.SecretUtil;
 
 public class SignalService {
 	
-	public static final String STORE_PATH = "store.json";
+	public static String STORE_PATH = "store.json";
+	public static String ATTACHMENTS_PATH = "attachments";
 	private static final int PASSWORD_LENGTH = 18;
 	private static final int SIGNALING_KEY_LENGTH = 52;
 	private static final int MAX_REGISTRATION_ID = 8192;
@@ -38,8 +69,14 @@ public class SignalService {
 	
 	private SignalServiceAccountManager accountManager;
 	private SignalServiceMessageSender messageSender;
+	private SignalServiceMessagePipe messagePipe;
+	private SignalServiceMessageReceiver messageReceiver;
+	private SignalServiceCipher cipher;
 	private JsonSignalStore store;
 	private IdentityKeyPair tempIdentity;
+	
+	private ArrayList<DataMessageListener> dataMessageListeners = new ArrayList<>();
+	private ArrayList<SyncMessageListener> syncMessageListeners = new ArrayList<>();
 	
 	public SignalService() throws IOException {
 		// Add bouncycastle
@@ -165,8 +202,140 @@ public class SignalService {
 		store.setLocalRegistrationId(registrationId);
 	}
 	
-	public void save() throws IOException {
+	public void quit() throws IOException {
 		store.save(new File(STORE_PATH));
+	}
+
+	
+	public void addDataMessageListener(DataMessageListener listener) {
+		dataMessageListeners.add(listener);
+	}
+	
+
+	public void removeDataMessageListener(DataMessageListener listener) {
+		dataMessageListeners.remove(listener);
+	}
+	
+	public void addSyncMessageListener(SyncMessageListener listener) {
+		syncMessageListeners.add(listener);
+	}
+	
+	public void removeSyncMessageListener(SyncMessageListener listener) {
+		syncMessageListeners.remove(listener);
+	}
+	
+	public void pull(int timeoutMillis) throws IOException {
+		checkRegistered();
+		if(messagePipe == null) {
+			messageReceiver = new SignalServiceMessageReceiver(store.getUrl(), 
+					trustStore, store.getPhoneNumber(), store.getPassword(), store.getDeviceId(), 
+					store.getSignalingKey(), store.getUserAgent());
+			messagePipe = messageReceiver.createMessagePipe();
+		}
+		try {
+			SignalServiceEnvelope envelope;
+			try {
+				envelope = messagePipe.read(timeoutMillis, TimeUnit.MILLISECONDS);
+			} catch (TimeoutException e) {
+				return;
+			}
+			if(!envelope.isReceipt() && (envelope.hasContent() || envelope.hasLegacyMessage())) {
+				if(cipher == null) {
+					cipher = new SignalServiceCipher(new SignalServiceAddress(store.getPhoneNumber()), store);
+				}
+				SignalServiceContent content = cipher.decrypt(envelope);
+				if(content.getDataMessage().isPresent()) {
+					SignalServiceDataMessage dataMessage = content.getDataMessage().get();
+					for(DataMessageListener listener : dataMessageListeners) {
+						listener.onMessageReceived(envelope.getSourceAddress(), dataMessage);
+					}
+				} else if(content.getSyncMessage().isPresent()) {
+					SignalServiceSyncMessage syncMessage = content.getSyncMessage().get();
+					if(syncMessage.getContacts().isPresent()) {
+						File file = saveAttachment(syncMessage.getContacts().get(), null);
+						DeviceContactsInputStream in = new DeviceContactsInputStream(new FileInputStream(file));
+						ArrayList<DeviceContact> contacts = new ArrayList<>();
+						try {
+							while(true) {
+								contacts.add(in.read());
+							}
+						} catch(IOException e) {
+							// we have to assume that we have an EOF here
+						}
+						for(SyncMessageListener listener : syncMessageListeners) {
+							listener.onContactsSync(contacts);
+						}
+					} else if(syncMessage.getGroups().isPresent()) {
+						File file = saveAttachment(syncMessage.getGroups().get(), null);
+						DeviceGroupsInputStream in = new DeviceGroupsInputStream(new FileInputStream(file));
+						ArrayList<DeviceGroup> groups = new ArrayList<>();
+						try {
+							while(true) {
+								groups.add(in.read());
+							}
+						} catch(IOException e) {
+							// we have to assume that we have an EOF here
+						}
+						for (SyncMessageListener listener : syncMessageListeners) {
+							listener.onGroupsSync(groups);
+						}
+					} else if(syncMessage.getBlockedList().isPresent()) {
+						BlockedListMessage blockedMessage = syncMessage.getBlockedList().get();
+						for (SyncMessageListener syncMessageListener : syncMessageListeners) {
+							syncMessageListener.onBlockedSync(blockedMessage.getNumbers());
+						}
+					} else if(syncMessage.getRead().isPresent()) {
+						List<ReadMessage> reads = syncMessage.getRead().get();
+						for (SyncMessageListener listener : syncMessageListeners) {
+							listener.onReadSync(reads);
+						}
+					} else if(syncMessage.getSent().isPresent()) {
+						SentTranscriptMessage transcript = syncMessage.getSent().get();
+						for (SyncMessageListener listener : syncMessageListeners) {
+							listener.onTranscriptSync(transcript);
+						}
+					} //TODO: implement requests
+				}
+			}
+		} catch (InvalidVersionException | InvalidMessageException | InvalidKeyException | DuplicateMessageException | InvalidKeyIdException | org.whispersystems.libsignal.UntrustedIdentityException | LegacyMessageException | NoSessionException e) {
+			throw new RuntimeException("We got a message with an incompatible version", e);
+			//TODO: security exceptions handling
+		}
+		
+	}
+	
+	public void checkPreKeys(int minimumKeys) throws IOException {
+		checkRegistered();
+		int preKeysCount = accountManager.getPreKeysCount();
+		if(preKeysCount < minimumKeys) {
+			
+		}
+	}
+	
+	public File saveAttachment(SignalServiceAttachment attachment, ProgressListener progressListener)
+			throws IOException {
+		File attachmentsDir = new File(ATTACHMENTS_PATH);
+		if(!attachmentsDir.exists()) {
+			boolean success = attachmentsDir.mkdirs();
+			if(!success) {
+				throw new IOException("Could not create attachments directory!");
+			}
+		}
+		String attachmentId = String.valueOf(attachment.asPointer().getId());
+		File file = Paths.get(attachmentsDir.getAbsolutePath(), attachmentId).toFile();
+		if(file.exists()) {
+			return file;
+		}
+		File buffer = Paths.get(attachmentsDir.getAbsolutePath(), attachmentId + ".part").toFile();
+		try {
+			InputStream in = messageReceiver.retrieveAttachment(attachment.asPointer(), buffer, progressListener);
+			Files.copy(in, file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+			buffer.delete();
+		} catch (InvalidMessageException e) {
+			throw new RuntimeException(e);
+			//TODO: exception handling
+		}
+		return file;
 	}
 	
 }
