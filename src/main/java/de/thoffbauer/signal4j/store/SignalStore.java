@@ -61,6 +61,8 @@ public abstract class SignalStore implements SignalProtocolStore {
 	}
 
 	public abstract void save(File file) throws IOException;
+	
+	public abstract DataStore getDataStore();
 
 	public abstract IdentityKey getIdentity(String name);
 	public abstract Iterable<Entry<SignalProtocolAddress, SessionRecord>> getSessions();

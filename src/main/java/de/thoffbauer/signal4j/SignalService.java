@@ -2,6 +2,7 @@ package de.thoffbauer.signal4j;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLEncoder;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 import org.whispersystems.libsignal.DuplicateMessageException;
 import org.whispersystems.libsignal.IdentityKeyPair;
@@ -41,6 +43,7 @@ import org.whispersystems.signalservice.api.messages.SignalServiceAttachment.Pro
 import org.whispersystems.signalservice.api.messages.SignalServiceContent;
 import org.whispersystems.signalservice.api.messages.SignalServiceDataMessage;
 import org.whispersystems.signalservice.api.messages.SignalServiceEnvelope;
+import org.whispersystems.signalservice.api.messages.SignalServiceGroup;
 import org.whispersystems.signalservice.api.messages.multidevice.BlockedListMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.DeviceContact;
 import org.whispersystems.signalservice.api.messages.multidevice.DeviceContactsInputStream;
@@ -54,11 +57,14 @@ import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 import org.whispersystems.signalservice.api.push.TrustStore;
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Request;
 
-import de.thoffbauer.signal4j.listener.DataMessageListener;
+import de.thoffbauer.signal4j.listener.ConversationListener;
 import de.thoffbauer.signal4j.listener.SecurityExceptionListener;
-import de.thoffbauer.signal4j.listener.SyncMessageListener;
+import de.thoffbauer.signal4j.store.DataStore;
+import de.thoffbauer.signal4j.store.Group;
+import de.thoffbauer.signal4j.store.GroupId;
 import de.thoffbauer.signal4j.store.JsonSignalStore;
 import de.thoffbauer.signal4j.store.SignalStore;
+import de.thoffbauer.signal4j.store.User;
 import de.thoffbauer.signal4j.store.WhisperTrustStore;
 import de.thoffbauer.signal4j.util.Base64;
 import de.thoffbauer.signal4j.util.SecretUtil;
@@ -90,8 +96,7 @@ public class SignalService {
 	private SignalStore store;
 	private IdentityKeyPair tempIdentity;
 	
-	private ArrayList<DataMessageListener> dataMessageListeners = new ArrayList<>();
-	private ArrayList<SyncMessageListener> syncMessageListeners = new ArrayList<>();
+	private ArrayList<ConversationListener> conversationListeners = new ArrayList<>();
 	private ArrayList<SecurityExceptionListener> securityExceptionListeners = new ArrayList<>();
 	
 	/**
@@ -156,7 +161,6 @@ public class SignalService {
 		store.setIdentityKeyPair(identityKeyPair);
 		store.setLastResortPreKey(KeyHelper.generateLastResortPreKey());
 		checkPreKeys(-1);
-		save();
 	}
 	
 	/**
@@ -214,7 +218,6 @@ public class SignalService {
 		}
 		store.setLastResortPreKey(KeyHelper.generateLastResortPreKey());
 		checkPreKeys(-1);
-		save();
 	}
 
 	/**
@@ -236,9 +239,10 @@ public class SignalService {
 	 * @throws IOException
 	 * @throws UntrustedIdentityException
 	 */
-	public void requestSync(Request.Type... types) throws IOException, UntrustedIdentityException {
+	public void requestSync() throws IOException, UntrustedIdentityException {
 		checkRegistered();
 		checkMessageSender();
+		Request.Type[] types = new Request.Type[] {Request.Type.CONTACTS, Request.Type.GROUPS, Request.Type.BLOCKED};
 		for(Request.Type type : types) {
 			RequestMessage request = new RequestMessage(Request.newBuilder().setType(type).build());
 			SignalServiceSyncMessage syncMessage = SignalServiceSyncMessage.forRequest(request);
@@ -281,42 +285,16 @@ public class SignalService {
 		store.setLocalRegistrationId(registrationId);
 	}
 	
-	private void save() throws IOException {
+	public void save() throws IOException {
 		store.save(new File(STORE_PATH));
 	}
 
-	/**
-	 * Add a listener for data, i.e. "normal" messages.
-	 * The listener may be executed if a message arrives during {@code pull()}
-	 * @param listener
-	 */
-	public void addDataMessageListener(DataMessageListener listener) {
-		dataMessageListeners.add(listener);
+	public void addConversationListener(ConversationListener listener) {
+		conversationListeners.add(listener);
 	}
 	
-	/**
-	 * Remove a data message listener
-	 * @param listener
-	 */
-	public void removeDataMessageListener(DataMessageListener listener) {
-		dataMessageListeners.remove(listener);
-	}
-	
-	/**
-	 * Add a listener for sync messages which are sent by the primary device.
-	 * The listener may be executed if a message arrives during {@code pull()}
-	 * @param listener
-	 */
-	public void addSyncMessageListener(SyncMessageListener listener) {
-		syncMessageListeners.add(listener);
-	}
-	
-	/**
-	 * Remove a sync message listener
-	 * @param listener
-	 */
-	public void removeSyncMessageListener(SyncMessageListener listener) {
-		syncMessageListeners.remove(listener);
+	public void removeConversationListener(ConversationListener listener) {
+		conversationListeners.remove(listener);
 	}
 	
 	/**
@@ -363,57 +341,10 @@ public class SignalService {
 				SignalServiceContent content = cipher.decrypt(envelope);
 				if(content.getDataMessage().isPresent()) {
 					SignalServiceDataMessage dataMessage = content.getDataMessage().get();
-					for(DataMessageListener listener : dataMessageListeners) {
-						listener.onMessageReceived(envelope.getSourceAddress(), dataMessage);
-					}
+					handleDataMessage(envelope, dataMessage);
 				} else if(content.getSyncMessage().isPresent()) {
 					SignalServiceSyncMessage syncMessage = content.getSyncMessage().get();
-					if(syncMessage.getContacts().isPresent()) {
-						File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getContacts().get(), null);
-						DeviceContactsInputStream in = new DeviceContactsInputStream(new FileInputStream(file));
-						ArrayList<DeviceContact> contacts = new ArrayList<>();
-						try {
-							while(true) {
-								contacts.add(in.read());
-							}
-						} catch(IOException e) {
-							// we have to assume that we have an EOF here
-						}
-						file.delete();
-						for(SyncMessageListener listener : syncMessageListeners) {
-							listener.onContactsSync(contacts);
-						}
-					} else if(syncMessage.getGroups().isPresent()) {
-						File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getGroups().get(), null);
-						DeviceGroupsInputStream in = new DeviceGroupsInputStream(new FileInputStream(file));
-						ArrayList<DeviceGroup> groups = new ArrayList<>();
-						try {
-							while(true) {
-								groups.add(in.read());
-							}
-						} catch(IOException e) {
-							// we have to assume that we have an EOF here
-						}
-						file.delete();
-						for (SyncMessageListener listener : syncMessageListeners) {
-							listener.onGroupsSync(groups);
-						}
-					} else if(syncMessage.getBlockedList().isPresent()) {
-						BlockedListMessage blockedMessage = syncMessage.getBlockedList().get();
-						for (SyncMessageListener syncMessageListener : syncMessageListeners) {
-							syncMessageListener.onBlockedSync(blockedMessage.getNumbers());
-						}
-					} else if(syncMessage.getRead().isPresent()) {
-						List<ReadMessage> reads = syncMessage.getRead().get();
-						for (SyncMessageListener listener : syncMessageListeners) {
-							listener.onReadSync(reads);
-						}
-					} else if(syncMessage.getSent().isPresent()) {
-						SentTranscriptMessage transcript = syncMessage.getSent().get();
-						for (SyncMessageListener listener : syncMessageListeners) {
-							listener.onTranscriptSync(transcript);
-						}
-					} //TODO: implement requests (maybe)
+					handleSyncMessage(envelope, syncMessage);
 				}
 			}
 		} catch (InvalidVersionException | InvalidMessageException | InvalidKeyException | DuplicateMessageException | InvalidKeyIdException | org.whispersystems.libsignal.UntrustedIdentityException | LegacyMessageException e) {
@@ -421,6 +352,134 @@ public class SignalService {
 		} catch(NoSessionException e) {
 			throw new RuntimeException("The store file seems to be corrupt!", e);
 		}
+	}
+
+	private void handleDataMessage(SignalServiceEnvelope envelope, SignalServiceDataMessage dataMessage) {
+		if(dataMessage.getGroupInfo().isPresent()) {
+			SignalServiceGroup groupInfo = dataMessage.getGroupInfo().get();
+			GroupId id = new GroupId(groupInfo.getGroupId());
+			Group group = store.getDataStore().getGroup(id);
+			if(groupInfo.getType() == SignalServiceGroup.Type.UPDATE) {
+				if(group == null) {
+					group = new Group(id);
+					group.setActive(true);
+					store.getDataStore().addGroup(group);
+				}
+				if(groupInfo.getName().isPresent()) {
+					group.setName(groupInfo.getName().get());
+				}
+				if(groupInfo.getMembers().isPresent()) {
+					group.setMembers(new ArrayList<>(groupInfo.getMembers().get()));
+				} // TODO: update avatar
+				fireGroupUpdate(envelope.getSourceAddress(), group);
+			} else if(groupInfo.getType() == SignalServiceGroup.Type.QUIT) {
+				if(group != null) {
+					group.setActive(false);
+				}
+				fireGroupUpdate(envelope.getSourceAddress(), group);
+			} else {
+				fireMessage(envelope.getSourceAddress(), dataMessage, group);
+			}
+		} else {
+			fireMessage(envelope.getSourceAddress(), dataMessage, null);
+		}
+	}
+
+	private void handleSyncMessage(SignalServiceEnvelope envelope, SignalServiceSyncMessage syncMessage)
+			throws IOException, FileNotFoundException {
+		if(syncMessage.getContacts().isPresent()) {
+			File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getContacts().get(), null);
+			DeviceContactsInputStream in = new DeviceContactsInputStream(new FileInputStream(file));
+			ArrayList<DeviceContact> contacts = new ArrayList<>();
+			try {
+				while(true) {
+					contacts.add(in.read());
+				}
+			} catch(IOException e) {
+				// we have to assume that we have an EOF here
+			}
+			file.delete();
+			List<User> contactsWrapped = contacts.stream().map(v -> new User(v)).collect(Collectors.toList());
+			store.getDataStore().overwriteContacts(contactsWrapped);
+			for(User contact : contactsWrapped) {
+				fireContactUpdate(contact);
+			}
+		} else if(syncMessage.getGroups().isPresent()) {
+			File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getGroups().get(), null);
+			DeviceGroupsInputStream in = new DeviceGroupsInputStream(new FileInputStream(file));
+			ArrayList<DeviceGroup> groups = new ArrayList<>();
+			try {
+				while(true) {
+					groups.add(in.read());
+				}
+			} catch(IOException e) {
+				// we have to assume that we have an EOF here
+			}
+			file.delete();
+			List<Group> groupsWrapped = groups.stream().map(v -> new Group(v)).collect(Collectors.toList());
+			store.getDataStore().overwriteGroups(groupsWrapped);
+			for(Group group : groupsWrapped) {
+				fireGroupUpdate(envelope.getSourceAddress(), group);
+			}
+		} else if(syncMessage.getBlockedList().isPresent()) {
+			BlockedListMessage blockedMessage = syncMessage.getBlockedList().get();
+			List<String> blocked = blockedMessage.getNumbers();
+			for(User contact : store.getDataStore().getContacts()) {
+				contact.setBlocked(false);
+			}
+			for(String number : blocked) {
+				User contact = store.getDataStore().getContact(number);
+				if(contact != null) {
+					contact.setBlocked(true);
+				}
+			}
+			//TODO: implement blocked sync
+		} else if(syncMessage.getRead().isPresent()) {
+			List<ReadMessage> reads = syncMessage.getRead().get();
+			//TODO: implement read sync
+		} else if(syncMessage.getSent().isPresent()) {
+			SentTranscriptMessage transcript = syncMessage.getSent().get();
+			handleDataMessage(envelope, transcript.getMessage());
+		} //TODO: implement requests (maybe)
+	}
+	
+	private void fireContactUpdate(User contact) {
+		for(ConversationListener listener : conversationListeners) {
+			listener.onContactUpdate(contact);
+		}
+	}
+
+	private void fireMessage(SignalServiceAddress address, SignalServiceDataMessage dataMessage, Group group) {
+		for(ConversationListener listener : conversationListeners) {
+			listener.onMessage(toUser(address), dataMessage, group);
+		}
+	}
+
+	private void fireGroupUpdate(SignalServiceAddress address, Group group) {
+		for(ConversationListener listener : conversationListeners) {
+			listener.onGroupUpdate(toUser(address), group);
+		}
+	}
+	
+	private void fireSecurityException(SignalServiceAddress sender, Exception e) {
+		fireSecurityException(toUser(sender), e);
+	}
+	
+	private void fireSecurityException(User sender, Exception e) {
+		for(SecurityExceptionListener listener : securityExceptionListeners) {
+			listener.onSecurityException(sender, e);
+		}
+	}
+	
+	private User toUser(SignalServiceAddress address) {
+		if(address == null) {
+			return null;
+		}
+		User user = store.getDataStore().getContact(address.getNumber());
+		if(user == null) {
+			user = new User(address.getNumber());
+		}
+		return user;
 	}
 	
 	/**
@@ -443,9 +502,9 @@ public class SignalService {
 				int nextPreKeyId = store.getNextPreKeyId();
 				ArrayList<PreKeyRecord> preKeys = new ArrayList<>();
 				for(int i = 0; i < PREKEYS_BATCH_SIZE; i++) {
-		            PreKeyRecord record = new PreKeyRecord(nextPreKeyId, Curve.generateKeyPair());
-		            store.storePreKey(record.getId(), record);
-		            preKeys.add(record);
+					PreKeyRecord record = new PreKeyRecord(nextPreKeyId, Curve.generateKeyPair());
+					store.storePreKey(record.getId(), record);
+					preKeys.add(record);
 					nextPreKeyId = (nextPreKeyId + 1) % MAX_PREKEY_ID;
 				}
 				store.setNextPreKeyId(nextPreKeyId);
@@ -462,7 +521,6 @@ public class SignalService {
 			} catch (InvalidKeyException e) {
 				throw new RuntimeException("Stored identity corrupt!", e);
 			}
-			save();
 		}
 	}
 	
@@ -476,6 +534,19 @@ public class SignalService {
 	 * @throws IOException
 	 */
 	public File saveAttachment(SignalServiceAddress sender, SignalServiceAttachment attachment, ProgressListener progressListener)
+			throws IOException {
+		return saveAttachment(toUser(sender), attachment, progressListener);
+	}
+	/**
+	 * Save an attachment to the attachments folder specified by {@code ATTACHMENTS_PATH}.
+	 * The file name is chosen automatically based on the attachment id.
+	 * @param sender for mapping an exception which might occur to the sender
+	 * @param attachment the attachment to download
+	 * @param progressListener an optional download progress listener
+	 * @return the file descriptor for the saved attachment
+	 * @throws IOException
+	 */
+	public File saveAttachment(User sender, SignalServiceAttachment attachment, ProgressListener progressListener)
 			throws IOException {
 		File attachmentsDir = new File(ATTACHMENTS_PATH);
 		if(!attachmentsDir.exists()) {
@@ -500,10 +571,8 @@ public class SignalService {
 		return file;
 	}
 	
-	private void fireSecurityException(SignalServiceAddress sender, Exception e) {
-		for(SecurityExceptionListener listener : securityExceptionListeners) {
-			listener.onSecurityException(sender, e);
-		}
+	public DataStore getDataStore() {
+		return store.getDataStore();
 	}
 	
 }

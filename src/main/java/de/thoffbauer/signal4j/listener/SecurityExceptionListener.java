@@ -1,9 +1,9 @@
 package de.thoffbauer.signal4j.listener;
 
-import org.whispersystems.signalservice.api.push.SignalServiceAddress;
+import de.thoffbauer.signal4j.store.User;
 
 public interface SecurityExceptionListener {
 	
-	void onSecurityException(SignalServiceAddress sender, Exception e);
+	void onSecurityException(User contact, Exception e);
 
 }

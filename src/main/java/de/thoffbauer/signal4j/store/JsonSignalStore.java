@@ -21,6 +21,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 
+import de.thoffbauer.signal4j.store.serialize.GroupIdDeserializer;
+import de.thoffbauer.signal4j.store.serialize.GroupIdKeyDeserializer;
+import de.thoffbauer.signal4j.store.serialize.GroupIdKeySerializer;
+import de.thoffbauer.signal4j.store.serialize.GroupIdSerializer;
 import de.thoffbauer.signal4j.store.serialize.IdentityKeyDeserializer;
 import de.thoffbauer.signal4j.store.serialize.IdentityKeyPairDeserializer;
 import de.thoffbauer.signal4j.store.serialize.IdentityKeyPairSerializer;
@@ -68,6 +72,9 @@ public class JsonSignalStore extends SignalStore {
 	@JsonProperty
 	private HashMap<SignalProtocolAddress, SessionRecord> sessions = new HashMap<>();
 	
+	@JsonProperty("data")
+	private JsonDataStore dataStore = new JsonDataStore();
+	
 	public static JsonSignalStore load(File file) throws IOException {
 		SimpleModule module = new SimpleModule();
 		module.addDeserializer(IdentityKeyPair.class, new IdentityKeyPairDeserializer());
@@ -75,7 +82,9 @@ public class JsonSignalStore extends SignalStore {
 		module.addDeserializer(PreKeyRecord.class, new PreKeyRecordDeserializer());
 		module.addDeserializer(SignedPreKeyRecord.class, new SignedPreKeyRecordDeserializer());
 		module.addDeserializer(SessionRecord.class, new SessionRecordDeserializer());
+		module.addDeserializer(GroupId.class, new GroupIdDeserializer());
 		module.addKeyDeserializer(SignalProtocolAddress.class, new SignalProtocolAddressDeserializer());
+		module.addKeyDeserializer(GroupId.class, new GroupIdKeyDeserializer());
 		ObjectMapper mapper = new ObjectMapper();
 		mapper.registerModule(module);
 		return mapper.readValue(file, JsonSignalStore.class);
@@ -88,11 +97,18 @@ public class JsonSignalStore extends SignalStore {
 		module.addSerializer(PreKeyRecord.class, new PreKeyRecordSerializer());
 		module.addSerializer(SignedPreKeyRecord.class, new SignedPreKeyRecordSerializer());
 		module.addSerializer(SessionRecord.class, new SessionRecordSerializer());
+		module.addSerializer(GroupId.class, new GroupIdSerializer());
 		module.addKeySerializer(SignalProtocolAddress.class, new SignalProtocolAddressSerializer());
+		module.addKeySerializer(GroupId.class, new GroupIdKeySerializer());
 		ObjectMapper mapper = new ObjectMapper();
 		mapper.registerModule(module);
 		mapper.enable(SerializationFeature.INDENT_OUTPUT);
 		mapper.writeValue(file, this);
+	}
+	
+	@Override
+	public DataStore getDataStore() {
+		return dataStore;
 	}
 	
 	@Override
