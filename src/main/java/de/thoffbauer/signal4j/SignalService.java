@@ -55,8 +55,10 @@ import org.whispersystems.signalservice.api.push.TrustStore;
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Request;
 
 import de.thoffbauer.signal4j.listener.DataMessageListener;
+import de.thoffbauer.signal4j.listener.SecurityExceptionListener;
 import de.thoffbauer.signal4j.listener.SyncMessageListener;
 import de.thoffbauer.signal4j.store.JsonSignalStore;
+import de.thoffbauer.signal4j.store.SignalStore;
 import de.thoffbauer.signal4j.store.WhisperTrustStore;
 import de.thoffbauer.signal4j.util.Base64;
 import de.thoffbauer.signal4j.util.SecretUtil;
@@ -85,11 +87,12 @@ public class SignalService {
 	private SignalServiceMessagePipe messagePipe;
 	private SignalServiceMessageReceiver messageReceiver;
 	private SignalServiceCipher cipher;
-	private JsonSignalStore store;
+	private SignalStore store;
 	private IdentityKeyPair tempIdentity;
 	
 	private ArrayList<DataMessageListener> dataMessageListeners = new ArrayList<>();
 	private ArrayList<SyncMessageListener> syncMessageListeners = new ArrayList<>();
+	private ArrayList<SecurityExceptionListener> securityExceptionListeners = new ArrayList<>();
 	
 	/**
 	 * Create a new instance. Will automatically load a store file if existent.
@@ -317,6 +320,22 @@ public class SignalService {
 	}
 	
 	/**
+	 * Add a listener for exceptions regarding the security of communication.
+	 * @param listener
+	 */
+	public void addSecurityExceptionListener(SecurityExceptionListener listener) {
+		securityExceptionListeners.add(listener);
+	}
+	
+	/**
+	 * Remove a security exception listener
+	 * @param listener
+	 */
+	public void removeSecurityExceptionListener(SecurityExceptionListener listener) {
+		securityExceptionListeners.remove(listener);
+	}
+	
+	/**
 	 * Wait for incoming messages. This method returns silently if the timeout passes.
 	 * If a message arrives, the corresponding listeners are called and the method returns.
 	 * @param timeoutMillis time to wait for messages
@@ -330,8 +349,8 @@ public class SignalService {
 					store.getSignalingKey(), store.getUserAgent());
 			messagePipe = messageReceiver.createMessagePipe();
 		}
+		SignalServiceEnvelope envelope = null;
 		try {
-			SignalServiceEnvelope envelope;
 			try {
 				envelope = messagePipe.read(timeoutMillis, TimeUnit.MILLISECONDS);
 			} catch (TimeoutException e) {
@@ -350,7 +369,7 @@ public class SignalService {
 				} else if(content.getSyncMessage().isPresent()) {
 					SignalServiceSyncMessage syncMessage = content.getSyncMessage().get();
 					if(syncMessage.getContacts().isPresent()) {
-						File file = saveAttachment(syncMessage.getContacts().get(), null);
+						File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getContacts().get(), null);
 						DeviceContactsInputStream in = new DeviceContactsInputStream(new FileInputStream(file));
 						ArrayList<DeviceContact> contacts = new ArrayList<>();
 						try {
@@ -365,7 +384,7 @@ public class SignalService {
 							listener.onContactsSync(contacts);
 						}
 					} else if(syncMessage.getGroups().isPresent()) {
-						File file = saveAttachment(syncMessage.getGroups().get(), null);
+						File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getGroups().get(), null);
 						DeviceGroupsInputStream in = new DeviceGroupsInputStream(new FileInputStream(file));
 						ArrayList<DeviceGroup> groups = new ArrayList<>();
 						try {
@@ -379,7 +398,7 @@ public class SignalService {
 						for (SyncMessageListener listener : syncMessageListeners) {
 							listener.onGroupsSync(groups);
 						}
-					} else if(syncMessage.getBlockedList().isPresent()) { // TODO: seems not to be working
+					} else if(syncMessage.getBlockedList().isPresent()) {
 						BlockedListMessage blockedMessage = syncMessage.getBlockedList().get();
 						for (SyncMessageListener syncMessageListener : syncMessageListeners) {
 							syncMessageListener.onBlockedSync(blockedMessage.getNumbers());
@@ -394,19 +413,19 @@ public class SignalService {
 						for (SyncMessageListener listener : syncMessageListeners) {
 							listener.onTranscriptSync(transcript);
 						}
-					} //TODO: implement requests
+					} //TODO: implement requests (maybe)
 				}
 			}
-		} catch (InvalidVersionException | InvalidMessageException | InvalidKeyException | DuplicateMessageException | InvalidKeyIdException | org.whispersystems.libsignal.UntrustedIdentityException | LegacyMessageException | NoSessionException e) {
-			throw new RuntimeException("We got a message with an incompatible version", e);
-			//TODO: security exceptions handling
+		} catch (InvalidVersionException | InvalidMessageException | InvalidKeyException | DuplicateMessageException | InvalidKeyIdException | org.whispersystems.libsignal.UntrustedIdentityException | LegacyMessageException e) {
+			fireSecurityException(envelope != null ? envelope.getSourceAddress() : null, e);
+		} catch(NoSessionException e) {
+			throw new RuntimeException("The store file seems to be corrupt!", e);
 		}
-		
 	}
 	
 	/**
 	 * Ensures that there are enough prekeys available. Has to be called regularly.<br>
-	 * Every time somebody sends you message, he uses one of your prekeys which you have uploaded earlier.
+	 * Every time somebody sends you a message, he uses one of your prekeys which you have uploaded earlier.
 	 * To always have one prekey available, you also upload a last resort key. You should always
 	 * have enough prekeys to prevent key reusing.
 	 * @param minimumKeys the minimum amount of keys to register. Must be below 100.
@@ -450,12 +469,13 @@ public class SignalService {
 	/**
 	 * Save an attachment to the attachments folder specified by {@code ATTACHMENTS_PATH}.
 	 * The file name is chosen automatically based on the attachment id.
+	 * @param sender for mapping an exception which might occur to the sender
 	 * @param attachment the attachment to download
 	 * @param progressListener an optional download progress listener
-	 * @return the file descriptor for the downloaded attachment
+	 * @return the file descriptor for the saved attachment
 	 * @throws IOException
 	 */
-	public File saveAttachment(SignalServiceAttachment attachment, ProgressListener progressListener)
+	public File saveAttachment(SignalServiceAddress sender, SignalServiceAttachment attachment, ProgressListener progressListener)
 			throws IOException {
 		File attachmentsDir = new File(ATTACHMENTS_PATH);
 		if(!attachmentsDir.exists()) {
@@ -475,10 +495,15 @@ public class SignalService {
 			Files.copy(in, file.toPath(), StandardCopyOption.REPLACE_EXISTING);
 			buffer.delete();
 		} catch (InvalidMessageException e) {
-			throw new RuntimeException(e);
-			//TODO: exception handling
+			fireSecurityException(sender, e);
 		}
 		return file;
+	}
+	
+	private void fireSecurityException(SignalServiceAddress sender, Exception e) {
+		for(SecurityExceptionListener listener : securityExceptionListeners) {
+			listener.onSecurityException(sender, e);
+		}
 	}
 	
 }

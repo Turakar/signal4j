@@ -1,12 +1,16 @@
 package de.thoffbauer.signal4j.store;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
 
 import org.whispersystems.libsignal.IdentityKey;
+import org.whispersystems.libsignal.IdentityKeyPair;
 import org.whispersystems.libsignal.SignalProtocolAddress;
+import org.whispersystems.libsignal.state.PreKeyRecord;
 import org.whispersystems.libsignal.state.SessionRecord;
 import org.whispersystems.libsignal.state.SignalProtocolStore;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
@@ -14,8 +18,6 @@ import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 public abstract class SignalStore implements SignalProtocolStore {
-
-	public abstract IdentityKey getIdentity(String name);
 	
 	@Override
 	@JsonIgnore
@@ -23,8 +25,6 @@ public abstract class SignalStore implements SignalProtocolStore {
 		IdentityKey storedIdentity = getIdentity(name);
 		return storedIdentity == null || identityKey.equals(storedIdentity);
 	}
-	
-	public abstract Iterable<Entry<SignalProtocolAddress, SessionRecord>> getSessions();
 	
 	@Override
 	@JsonIgnore
@@ -50,7 +50,6 @@ public abstract class SignalStore implements SignalProtocolStore {
 		}
 	}
 	
-	public abstract SessionRecord getSession(SignalProtocolAddress address);
 	
 	@Override
 	public SessionRecord loadSession(SignalProtocolAddress address) {
@@ -60,4 +59,31 @@ public abstract class SignalStore implements SignalProtocolStore {
 		}
 		return session;
 	}
+
+	public abstract void save(File file) throws IOException;
+
+	public abstract IdentityKey getIdentity(String name);
+	public abstract Iterable<Entry<SignalProtocolAddress, SessionRecord>> getSessions();
+	public abstract SessionRecord getSession(SignalProtocolAddress address);
+	
+	public abstract String getUrl();
+	public abstract void setUrl(String url);
+	public abstract String getUserAgent();
+	public abstract void setUserAgent(String userAgent);
+	public abstract String getPhoneNumber();
+	public abstract void setPhoneNumber(String phoneNumber);
+	public abstract void setIdentityKeyPair(IdentityKeyPair identityKeyPair);
+	public abstract String getPassword();
+	public abstract void setPassword(String password);
+	public abstract String getSignalingKey();
+	public abstract void setSignalingKey(String signalingKey);
+	public abstract int getDeviceId();
+	public abstract void setDeviceId(int deviceId);
+	public abstract PreKeyRecord getLastResortPreKey();
+	public abstract void setLastResortPreKey(PreKeyRecord lastResortPreKey);
+	public abstract void setLocalRegistrationId(int localRegistrationId);
+	public abstract int getNextPreKeyId();
+	public abstract void setNextPreKeyId(int nextPreKeyId);
+	public abstract int getNextSignedPreKeyId();
+	public abstract void setNextSignedPreKeyId(int nextSignedPreKeyId);
 }
