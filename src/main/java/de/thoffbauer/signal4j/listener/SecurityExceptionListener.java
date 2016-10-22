@@ -4,6 +4,12 @@ import de.thoffbauer.signal4j.store.User;
 
 public interface SecurityExceptionListener {
 	
-	void onSecurityException(User contact, Exception e);
+	/**
+	 * Called if a security relevant exception rises during message decrypting or attachment downloading.
+	 * The message will not be forwarded to the conversation listeners.
+	 * @param user the user from whom the invalid message came
+	 * @param e one of InvalidVersionException, InvalidMessageException, InvalidKeyException, DuplicateMessageException, InvalidKeyIdException, UntrustedIdentityException or LegacyMessageException
+	 */
+	void onSecurityException(User user, Exception e);
 
 }

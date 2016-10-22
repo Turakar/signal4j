@@ -161,6 +161,7 @@ public class SignalService {
 		store.setIdentityKeyPair(identityKeyPair);
 		store.setLastResortPreKey(KeyHelper.generateLastResortPreKey());
 		checkPreKeys(-1);
+		save();
 	}
 	
 	/**
@@ -218,6 +219,7 @@ public class SignalService {
 		}
 		store.setLastResortPreKey(KeyHelper.generateLastResortPreKey());
 		checkPreKeys(-1);
+		save();
 	}
 
 	/**
@@ -285,6 +287,11 @@ public class SignalService {
 		store.setLocalRegistrationId(registrationId);
 	}
 	
+	/**
+	 * Saves the store. As this is done automatically inside the library, 
+	 * you only need to call this if you change sometihng manually.
+	 * @throws IOException
+	 */
 	public void save() throws IOException {
 		store.save(new File(STORE_PATH));
 	}
@@ -315,7 +322,7 @@ public class SignalService {
 	
 	/**
 	 * Wait for incoming messages. This method returns silently if the timeout passes.
-	 * If a message arrives, the corresponding listeners are called and the method returns.
+	 * If a message arrives, the conversation listeners are called and the method returns.
 	 * @param timeoutMillis time to wait for messages
 	 * @throws IOException
 	 */
@@ -354,7 +361,7 @@ public class SignalService {
 		}
 	}
 
-	private void handleDataMessage(SignalServiceEnvelope envelope, SignalServiceDataMessage dataMessage) {
+	private void handleDataMessage(SignalServiceEnvelope envelope, SignalServiceDataMessage dataMessage) throws IOException {
 		if(dataMessage.getGroupInfo().isPresent()) {
 			SignalServiceGroup groupInfo = dataMessage.getGroupInfo().get();
 			GroupId id = new GroupId(groupInfo.getGroupId());
@@ -425,25 +432,26 @@ public class SignalService {
 			BlockedListMessage blockedMessage = syncMessage.getBlockedList().get();
 			List<String> blocked = blockedMessage.getNumbers();
 			for(User contact : store.getDataStore().getContacts()) {
-				contact.setBlocked(false);
-			}
-			for(String number : blocked) {
-				User contact = store.getDataStore().getContact(number);
-				if(contact != null) {
+				boolean isNewBlocked = blocked.contains(contact.getNumber());
+				if(contact.isBlocked() && !isNewBlocked) {
+					contact.setBlocked(false);
+					fireContactUpdate(contact);
+				} else if(!contact.isBlocked() && isNewBlocked) {
 					contact.setBlocked(true);
+					fireContactUpdate(contact);
 				}
 			}
-			//TODO: implement blocked sync
 		} else if(syncMessage.getRead().isPresent()) {
 			List<ReadMessage> reads = syncMessage.getRead().get();
-			//TODO: implement read sync
+			fireReadUpdate(reads);
 		} else if(syncMessage.getSent().isPresent()) {
 			SentTranscriptMessage transcript = syncMessage.getSent().get();
 			handleDataMessage(envelope, transcript.getMessage());
 		} //TODO: implement requests (maybe)
 	}
 	
-	private void fireContactUpdate(User contact) {
+	private void fireContactUpdate(User contact) throws IOException {
+		save();
 		for(ConversationListener listener : conversationListeners) {
 			listener.onContactUpdate(contact);
 		}
@@ -455,9 +463,16 @@ public class SignalService {
 		}
 	}
 
-	private void fireGroupUpdate(SignalServiceAddress address, Group group) {
+	private void fireGroupUpdate(SignalServiceAddress address, Group group) throws IOException {
+		save();
 		for(ConversationListener listener : conversationListeners) {
 			listener.onGroupUpdate(toUser(address), group);
+		}
+	}
+	
+	private void fireReadUpdate(List<ReadMessage> readList) {
+		for(ConversationListener listener : conversationListeners) {
+			listener.onReadUpdate(readList);
 		}
 	}
 	
@@ -471,7 +486,12 @@ public class SignalService {
 		}
 	}
 	
-	private User toUser(SignalServiceAddress address) {
+	/**
+	 * Tries to find the address in the stored contacts and creates new user if necessary (but does not store it).
+	 * @param address
+	 * @return the found contact or the new user
+	 */
+	public User toUser(SignalServiceAddress address) {
 		if(address == null) {
 			return null;
 		}
@@ -521,6 +541,7 @@ public class SignalService {
 			} catch (InvalidKeyException e) {
 				throw new RuntimeException("Stored identity corrupt!", e);
 			}
+			save();
 		}
 	}
 	
@@ -571,6 +592,13 @@ public class SignalService {
 		return file;
 	}
 	
+	/**
+	 * Returns the data store where the contacts and groups are stored.<br>
+	 * There are two stores, both saved in {@code STORE_PATH}. Both stores are managed by the library,
+	 * so you should only use this store for reading it. If you have to change something manually, call {@code save()}
+	 * afterwards.
+	 * @return the data store
+	 */
 	public DataStore getDataStore() {
 		return store.getDataStore();
 	}
