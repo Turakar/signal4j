@@ -6,8 +6,6 @@ import java.util.Collection;
 import java.util.List;
 
 public abstract class DataStore {
-
-	//TODO: add avatar support for groups and contacts
 	
 	public abstract User getContact(String number);
 	public abstract void addContact(User contact);

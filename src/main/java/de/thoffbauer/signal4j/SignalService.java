@@ -483,7 +483,7 @@ public class SignalService {
 		} else if(syncMessage.getSent().isPresent()) {
 			SentTranscriptMessage transcript = syncMessage.getSent().get();
 			handleDataMessage(envelope, transcript.getMessage());
-		} //TODO: implement requests (maybe)
+		}
 	}
 	
 	private void fireContactUpdate(User contact) throws IOException {
