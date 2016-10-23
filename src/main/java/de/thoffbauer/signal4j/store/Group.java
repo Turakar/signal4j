@@ -9,6 +9,7 @@ public class Group {
 	private GroupId id;
 	private String name;
 	private ArrayList<String> members;
+	private String avatarId;
 	private boolean active;
 	
 	public Group() {
@@ -56,6 +57,14 @@ public class Group {
 
 	public void setActive(boolean active) {
 		this.active = active;
+	}
+
+	public String getAvatarId() {
+		return avatarId;
+	}
+
+	public void setAvatarId(String avatarId) {
+		this.avatarId = avatarId;
 	}
 
 }

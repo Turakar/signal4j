@@ -6,6 +6,7 @@ public class User {
 	
 	private String number;
 	private String name;
+	private String avatarId;
 	private String color;
 	private boolean blocked = false;
 	
@@ -53,6 +54,14 @@ public class User {
 
 	public void setBlocked(boolean blocked) {
 		this.blocked = blocked;
+	}
+
+	public String getAvatarId() {
+		return avatarId;
+	}
+
+	public void setAvatarId(String avatarId) {
+		this.avatarId = avatarId;
 	}
 
 }

@@ -13,9 +13,9 @@ import java.security.Security;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.stream.Collectors;
 
 import org.whispersystems.libsignal.DuplicateMessageException;
 import org.whispersystems.libsignal.IdentityKeyPair;
@@ -237,18 +237,21 @@ public class SignalService {
 	
 	/**
 	 * Request sync messages from primary device. They are received using the listeners
-	 * @param types
 	 * @throws IOException
 	 * @throws UntrustedIdentityException
 	 */
-	public void requestSync() throws IOException, UntrustedIdentityException {
-		checkRegistered();
-		checkMessageSender();
-		Request.Type[] types = new Request.Type[] {Request.Type.CONTACTS, Request.Type.GROUPS, Request.Type.BLOCKED};
-		for(Request.Type type : types) {
-			RequestMessage request = new RequestMessage(Request.newBuilder().setType(type).build());
-			SignalServiceSyncMessage syncMessage = SignalServiceSyncMessage.forRequest(request);
-			messageSender.sendMessage(syncMessage);
+	public void requestSync() throws IOException {
+		try {
+			checkRegistered();
+			checkMessageSender();
+			Request.Type[] types = new Request.Type[] {Request.Type.CONTACTS, Request.Type.GROUPS, Request.Type.BLOCKED};
+			for(Request.Type type : types) {
+				RequestMessage request = new RequestMessage(Request.newBuilder().setType(type).build());
+				SignalServiceSyncMessage syncMessage = SignalServiceSyncMessage.forRequest(request);
+				messageSender.sendMessage(syncMessage);
+			}
+		} catch(UntrustedIdentityException e) {
+			fireSecurityException(new SignalServiceAddress(store.getPhoneNumber()), e);
 		}
 	}
 
@@ -377,7 +380,16 @@ public class SignalService {
 				}
 				if(groupInfo.getMembers().isPresent()) {
 					group.setMembers(new ArrayList<>(groupInfo.getMembers().get()));
-				} // TODO: update avatar
+				}
+				if(groupInfo.getAvatar().isPresent()) {
+					SignalServiceAttachment attachment = groupInfo.getAvatar().get();
+					String avatarId = UUID.randomUUID().toString();
+					saveAttachment(toUser(envelope.getSourceAddress()), attachment, null, avatarId);
+					if(group.getAvatarId() != null) {
+						deleteAttachment(group.getAvatarId());
+					}
+					group.setAvatarId(avatarId);
+				}
 				fireGroupUpdate(envelope.getSourceAddress(), group);
 			} else if(groupInfo.getType() == SignalServiceGroup.Type.QUIT) {
 				if(group != null) {
@@ -397,35 +409,59 @@ public class SignalService {
 		if(syncMessage.getContacts().isPresent()) {
 			File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getContacts().get(), null);
 			DeviceContactsInputStream in = new DeviceContactsInputStream(new FileInputStream(file));
-			ArrayList<DeviceContact> contacts = new ArrayList<>();
-			try {
-				while(true) {
-					contacts.add(in.read());
+			ArrayList<User> contacts = new ArrayList<>();
+			while(true) {
+				DeviceContact deviceContact;
+				try {
+					deviceContact = in.read();
+				} catch(IOException e) {
+					// we have to assume that we have an EOF here
+					break;
 				}
-			} catch(IOException e) {
-				// we have to assume that we have an EOF here
+				User contact = new User(deviceContact);
+				contacts.add(contact);
+				if(deviceContact.getAvatar().isPresent()) {
+					String id = UUID.randomUUID().toString();
+					saveAttachment(toUser(envelope.getSourceAddress()), deviceContact.getAvatar().get(), 
+							null, id);
+					contact.setAvatarId(id);
+				}
 			}
 			file.delete();
-			List<User> contactsWrapped = contacts.stream().map(v -> new User(v)).collect(Collectors.toList());
-			store.getDataStore().overwriteContacts(contactsWrapped);
-			for(User contact : contactsWrapped) {
+			store.getDataStore().getContacts().stream()
+					.filter(v -> v.getAvatarId() != null)
+					.forEach(v -> deleteAttachment(v.getAvatarId()));
+			store.getDataStore().overwriteContacts(contacts);
+			for(User contact : contacts) {
 				fireContactUpdate(contact);
 			}
 		} else if(syncMessage.getGroups().isPresent()) {
 			File file = saveAttachment(envelope.getSourceAddress(), syncMessage.getGroups().get(), null);
 			DeviceGroupsInputStream in = new DeviceGroupsInputStream(new FileInputStream(file));
-			ArrayList<DeviceGroup> groups = new ArrayList<>();
-			try {
-				while(true) {
-					groups.add(in.read());
+			List<Group> groups = new ArrayList<>();
+			while(true) {
+				DeviceGroup deviceGroup;
+				try {
+					deviceGroup = in.read();
+				} catch(IOException e) {
+					// we have to assume that we have an EOF here
+					break;
 				}
-			} catch(IOException e) {
-				// we have to assume that we have an EOF here
+				Group group = new Group(deviceGroup);
+				groups.add(group);
+				if(deviceGroup.getAvatar().isPresent()) {
+					String id = UUID.randomUUID().toString();
+					saveAttachment(toUser(envelope.getSourceAddress()), deviceGroup.getAvatar().get(), 
+							null, id);
+					group.setAvatarId(id);
+				}
 			}
 			file.delete();
-			List<Group> groupsWrapped = groups.stream().map(v -> new Group(v)).collect(Collectors.toList());
-			store.getDataStore().overwriteGroups(groupsWrapped);
-			for(Group group : groupsWrapped) {
+			store.getDataStore().getGroups().stream()
+					.filter(v -> v.getAvatarId() != null)
+					.forEach(v -> deleteAttachment(v.getAvatarId()));
+			store.getDataStore().overwriteGroups(groups);
+			for(Group group : groups) {
 				fireGroupUpdate(envelope.getSourceAddress(), group);
 			}
 		} else if(syncMessage.getBlockedList().isPresent()) {
@@ -569,6 +605,11 @@ public class SignalService {
 	 */
 	public File saveAttachment(User sender, SignalServiceAttachment attachment, ProgressListener progressListener)
 			throws IOException {
+		String attachmentId = String.valueOf(attachment.asPointer().getId());
+		return saveAttachment(sender, attachment, progressListener, attachmentId);
+	}
+	private File saveAttachment(User sender, SignalServiceAttachment attachment, 
+			ProgressListener progressListener, String attachmentId) throws IOException {
 		File attachmentsDir = new File(ATTACHMENTS_PATH);
 		if(!attachmentsDir.exists()) {
 			boolean success = attachmentsDir.mkdirs();
@@ -576,25 +617,55 @@ public class SignalService {
 				throw new IOException("Could not create attachments directory!");
 			}
 		}
-		String attachmentId = String.valueOf(attachment.asPointer().getId());
 		File file = Paths.get(attachmentsDir.getAbsolutePath(), attachmentId).toFile();
 		if(file.exists()) {
 			return file;
 		}
 		File buffer = Paths.get(attachmentsDir.getAbsolutePath(), attachmentId + ".part").toFile();
-		try {
-			InputStream in = messageReceiver.retrieveAttachment(attachment.asPointer(), buffer, progressListener);
-			Files.copy(in, file.toPath(), StandardCopyOption.REPLACE_EXISTING);
-			buffer.delete();
-		} catch (InvalidMessageException e) {
-			fireSecurityException(sender, e);
+		InputStream in = null;
+		if(attachment.isPointer()) {
+			try {
+				in = messageReceiver.retrieveAttachment(attachment.asPointer(), buffer, progressListener);
+			} catch (InvalidMessageException e) {
+				fireSecurityException(sender, e);
+			}
+		} else {
+			in = attachment.asStream().getInputStream();
 		}
+		Files.copy(in, file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+		
+		buffer.delete();
 		return file;
 	}
 	
 	/**
+	 * Convenience method to delete attachments
+	 * @param id
+	 */
+	public void deleteAttachment(String id) {
+		File attachment = Paths.get(ATTACHMENTS_PATH, id).toFile();
+		if(attachment.exists()) {
+			attachment.delete();
+		}
+	}
+	
+	/**
+	 * Convenience method to get a file handle for an already saved attachment.
+	 * @param id
+	 * @return the file or null if no corresponding file is cached
+	 */
+	public File getAttachment(String id) {
+		File attachment = Paths.get(ATTACHMENTS_PATH, id).toFile();
+		if(attachment.exists()) {
+			return attachment;
+		} else {
+			return null;
+		}
+	}
+	
+	/**
 	 * Returns the data store where the contacts and groups are stored.<br>
-	 * There are two stores, both saved in {@code STORE_PATH}. Both stores are managed by the library,
+	 * There are two stores (key store (private) and data store), both saved in {@code STORE_PATH}. Both stores are managed by the library,
 	 * so you should only use this store for reading it. If you have to change something manually, call {@code save()}
 	 * afterwards.
 	 * @return the data store
