@@ -229,10 +229,26 @@ public class SignalService {
 	 * @throws UntrustedIdentityException
 	 * @throws IOException
 	 */
-	public void sendMessage(SignalServiceAddress address, SignalServiceDataMessage message) throws UntrustedIdentityException, IOException {
+	public void sendMessage(String address, SignalServiceDataMessage message) throws UntrustedIdentityException, IOException {
 		checkRegistered();
 		checkMessageSender();
-		messageSender.sendMessage(address, message);
+		messageSender.sendMessage(new SignalServiceAddress(address), message);
+	}
+	
+	/**
+	 * Notify other devices that these messages have been read.
+	 * @param messages
+	 * @throws IOException
+	 */
+	public void markRead(List<ReadMessage> messages) throws IOException {
+		checkRegistered();
+		checkMessageSender();
+		try {
+			SignalServiceSyncMessage syncMessage = SignalServiceSyncMessage.forRead(messages);
+			messageSender.sendMessage(syncMessage);
+		} catch (UntrustedIdentityException e) {
+			fireSecurityException(new SignalServiceAddress(store.getPhoneNumber()), e);
+		}
 	}
 	
 	/**
