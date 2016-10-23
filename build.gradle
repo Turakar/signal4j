@@ -1,8 +1,10 @@
 apply plugin: 'java'
+apply plugin: 'maven'
+apply plugin: 'signing'
 
 repositories {
     jcenter()
-    mavenLocal()
+    mavenCentral()
     maven { url "https://jitpack.io" }
 }
 
@@ -14,4 +16,87 @@ dependencies {
     compile 'com.fasterxml.jackson.core:jackson-databind:2.5.0'
     compile 'org.bouncycastle:bcprov-jdk15on:1.55'
     compile 'org.bouncycastle:bcprov-ext-jdk15on:1.55'
+}
+
+if (JavaVersion.current().isJava8Compatible()) {
+  allprojects {
+    tasks.withType(Javadoc) {
+      options.addStringOption('Xdoclint:none', '-quiet')
+    }
+  }
+}
+
+signing {
+    required { has("release") && gradle.taskGraph.hasTask("uploadArchives") }
+    sign configurations.archives
+}
+
+def ossrhUsername = project.properties['ossrhUsername'] ?: ""
+def ossrhPassword = project.properties['ossrhPassword'] ?: ""
+
+uploadArchives {
+    configuration = configurations.archives
+    repositories.mavenDeployer {
+        beforeDeployment { MavenDeployment deployment -> signing.signPom(deployment) }
+
+        repository(url: "https://oss.sonatype.org/service/local/staging/deploy/maven2/") {
+            authentication(userName: ossrhUsername, password: ossrhPassword)
+        }
+
+        snapshotRepository(url: "https://oss.sonatype.org/content/repositories/snapshots/") {
+            authentication(userName: ossrhUsername, password: ossrhPassword)
+        }
+
+        pom.project {
+            name 'signal4j'
+            packaging 'jar'
+            description 'Simple library for using the Signal service'
+            url 'https://github.com/Turakar/signal4j'
+
+            scm {
+                url 'scm:git@github.com:Turakar/signal4j.git'
+                connection 'scm:git@github.com:Turakar/signal4j.git'
+                developerConnection 'scm:git@github.com:Turakar/signal4j.git'
+            }
+
+            licenses {
+                license {
+                    name 'GPLv3'
+                    url 'https://www.gnu.org/licenses/gpl-3.0.txt'
+                    distribution 'repo'
+                }
+            }
+
+            developers {
+                developer {
+                    name 'Tilman Hoffbauer'
+                }
+            }
+        }
+    }
+}
+
+task installArchives(type: Upload) {
+    description "Installs the artifacts to the local Maven repository."
+    configuration = configurations['archives']
+    repositories {
+        mavenDeployer {
+            repository url: "file://${System.properties['user.home']}/.m2/repository"
+        }
+    }
+}
+
+task packageJavadoc(type: Jar, dependsOn: 'javadoc') {
+    from javadoc.destinationDir
+    classifier = 'javadoc'
+}
+
+task packageSources(type: Jar) {
+    from sourceSets.main.allSource
+    classifier = 'sources'
+}
+
+artifacts {
+    archives packageJavadoc
+    archives packageSources
 }
