@@ -156,7 +156,7 @@ public class SignalService {
 		}
 		createRegistrationId();
 		accountManager.verifyAccountWithCode(verificationCode, store.getSignalingKey(), 
-				store.getLocalRegistrationId(), false);
+				store.getLocalRegistrationId(), false, true);
 		IdentityKeyPair identityKeyPair = KeyHelper.generateIdentityKeyPair();
 		store.setIdentityKeyPair(identityKeyPair);
 		store.setLastResortPreKey(KeyHelper.generateLastResortPreKey());

@@ -15,7 +15,7 @@ repositories {
 
 dependencies {
     compile 'org.slf4j:slf4j-api:1.7.21'
-    compile 'com.github.turakar:signal-service-java:2.3.1provisioning'
+    compile 'com.github.turakar:signal-service-java:2.3.1provisioning.2'
     compile 'com.fasterxml.jackson.core:jackson-databind:2.5.0'
     compile 'org.bouncycastle:bcprov-jdk15on:1.55'
     compile 'org.bouncycastle:bcprov-ext-jdk15on:1.55'
