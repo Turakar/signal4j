@@ -2,6 +2,11 @@ apply plugin: 'java'
 apply plugin: 'maven'
 apply plugin: 'signing'
 
+version= '1.0.0'
+group = 'com.github.turakar'
+sourceCompatibility = 1.8
+archivesBaseName = "signal4j"
+
 repositories {
     jcenter()
     mavenCentral()
@@ -27,7 +32,7 @@ if (JavaVersion.current().isJava8Compatible()) {
 }
 
 signing {
-    required { has("release") && gradle.taskGraph.hasTask("uploadArchives") }
+    required { gradle.taskGraph.hasTask("uploadArchives") }
     sign configurations.archives
 }
 
