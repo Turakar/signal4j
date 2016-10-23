@@ -40,7 +40,7 @@ PreKeys are used for encryption and have to be generated prior to using them. Th
 You can request a sync message (containing contacts, groups and blocked list) using `requestSync()`. This will populate the store file.
 
 ### Sending Messages
-Messages are represented by `SignalServiceDataMessage`. You can either create them using the constructors or using the builder. Attachments cannot be uploaded yet using signa4j but using libsignal-service itself (WIP). To send a message use `sendMessage()`
+Messages are represented by `SignalServiceDataMessage`. You can either create them using the constructors or using the builder. Attachments should be sent as `SignalServiceAttachmentStream`. To send a message use `sendMessage()`.
 
 ### Receiving Messages
 Receiving is done using `pull()` which is a blocking operation. Messages are processed using `ConversationListener` which has to be added prior to calling `pull()` using `addConversationListener()`. The `ConversationListener` receives all data messages through `onMessage()` (even the ones of another device of you) while associating `User` objects automatically to the sender's phone number. It additionally receives sync updates (those from `requestSync()` too) through `onContactUpdate()` and `onGroupUpdate()`. Using `onReadUpdate()` you can get read notifications from a different device of you. You cannot send read notifications yourself in the moment (WIP). Remember that read notifications are not transmitted to your contacts but only to the devices you use to manage notifications.
