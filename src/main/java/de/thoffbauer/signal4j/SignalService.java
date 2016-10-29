@@ -244,7 +244,7 @@ public class SignalService {
 	
 	/**
 	 * Send a data, i.e. "normal" message to a group
-	 * @param address
+	 * @param addresses
 	 * @param message
 	 * @throws IOException
 	 */
