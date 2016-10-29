@@ -16,6 +16,7 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 import org.whispersystems.libsignal.DuplicateMessageException;
 import org.whispersystems.libsignal.IdentityKeyPair;
@@ -55,6 +56,8 @@ import org.whispersystems.signalservice.api.messages.multidevice.SentTranscriptM
 import org.whispersystems.signalservice.api.messages.multidevice.SignalServiceSyncMessage;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 import org.whispersystems.signalservice.api.push.TrustStore;
+import org.whispersystems.signalservice.api.push.exceptions.EncapsulatedExceptions;
+import org.whispersystems.signalservice.api.push.exceptions.UnregisteredUserException;
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Request;
 
 import de.thoffbauer.signal4j.listener.ConversationListener;
@@ -226,13 +229,46 @@ public class SignalService {
 	 * Send a data, i.e. "normal" message
 	 * @param address
 	 * @param message
-	 * @throws UntrustedIdentityException
 	 * @throws IOException
 	 */
-	public void sendMessage(String address, SignalServiceDataMessage message) throws UntrustedIdentityException, IOException {
+	public void sendMessage(String address, SignalServiceDataMessage message) throws IOException {
 		checkRegistered();
 		checkMessageSender();
-		messageSender.sendMessage(new SignalServiceAddress(address), message);
+		try {
+			messageSender.sendMessage(new SignalServiceAddress(address), message);
+		} catch (UntrustedIdentityException e) {
+			fireSecurityException(new SignalServiceAddress(address), e);
+		}
+		save();
+	}
+	
+	/**
+	 * Send a data, i.e. "normal" message to a group
+	 * @param address
+	 * @param message
+	 * @throws IOException
+	 */
+	public void sendMessage(List<String> addresses, SignalServiceDataMessage message) throws IOException {
+		checkRegistered();
+		checkMessageSender();
+		List<SignalServiceAddress> signalServiceAddresses = addresses.stream()
+				.map(v -> new SignalServiceAddress(v))
+				.collect(Collectors.toList());
+		try {
+			messageSender.sendMessage(signalServiceAddresses, message);
+		} catch (EncapsulatedExceptions e) {
+			for(UntrustedIdentityException ex : e.getUntrustedIdentityExceptions()) {
+				fireSecurityException(new SignalServiceAddress(ex.getE164Number()), ex);
+			}
+			for(UnregisteredUserException ex : e.getUnregisteredUserExceptions()) {
+				fireSecurityException(new SignalServiceAddress(ex.getE164Number()), ex);
+			}
+			if(!e.getNetworkExceptions().isEmpty()) {
+				throw new IOException(e.getNetworkExceptions().size() + " network exception(s)! One is following.", 
+						e.getNetworkExceptions().get(0));
+			}
+		}
+		save();
 	}
 	
 	/**
@@ -373,6 +409,7 @@ public class SignalService {
 					handleSyncMessage(envelope, syncMessage);
 				}
 			}
+			save();
 		} catch (InvalidVersionException | InvalidMessageException | InvalidKeyException | DuplicateMessageException | InvalidKeyIdException | org.whispersystems.libsignal.UntrustedIdentityException | LegacyMessageException e) {
 			fireSecurityException(envelope != null ? envelope.getSourceAddress() : null, e);
 		} catch(NoSessionException e) {
@@ -427,11 +464,9 @@ public class SignalService {
 			DeviceContactsInputStream in = new DeviceContactsInputStream(new FileInputStream(file));
 			ArrayList<User> contacts = new ArrayList<>();
 			while(true) {
-				DeviceContact deviceContact;
-				try {
-					deviceContact = in.read();
-				} catch(IOException e) {
-					// we have to assume that we have an EOF here
+				DeviceContact deviceContact = in.read();
+				if(deviceContact == null) {
+					//EOF
 					break;
 				}
 				User contact = new User(deviceContact);
@@ -456,11 +491,9 @@ public class SignalService {
 			DeviceGroupsInputStream in = new DeviceGroupsInputStream(new FileInputStream(file));
 			List<Group> groups = new ArrayList<>();
 			while(true) {
-				DeviceGroup deviceGroup;
-				try {
-					deviceGroup = in.read();
-				} catch(IOException e) {
-					// we have to assume that we have an EOF here
+				DeviceGroup deviceGroup = in.read();
+				if(deviceGroup == null) {
+					//EOF
 					break;
 				}
 				Group group = new Group(deviceGroup);
@@ -503,7 +536,6 @@ public class SignalService {
 	}
 	
 	private void fireContactUpdate(User contact) throws IOException {
-		save();
 		for(ConversationListener listener : conversationListeners) {
 			listener.onContactUpdate(contact);
 		}
@@ -516,7 +548,6 @@ public class SignalService {
 	}
 
 	private void fireGroupUpdate(SignalServiceAddress address, Group group) throws IOException {
-		save();
 		for(ConversationListener listener : conversationListeners) {
 			listener.onGroupUpdate(toUser(address), group);
 		}

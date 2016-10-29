@@ -2,7 +2,7 @@ apply plugin: 'java'
 apply plugin: 'maven'
 apply plugin: 'signing'
 
-version= '1.0.1'
+version= '1.0.3'
 group = 'com.github.turakar'
 sourceCompatibility = 1.8
 archivesBaseName = "signal4j"
@@ -15,7 +15,7 @@ repositories {
 
 dependencies {
     compile 'org.slf4j:slf4j-api:1.7.21'
-    compile 'com.github.turakar:signal-service-java:2.3.1provisioning.2'
+    compile 'com.github.turakar:signal-service-java:2.3.1provisioning.3'
     compile 'com.fasterxml.jackson.core:jackson-databind:2.5.0'
     compile 'org.bouncycastle:bcprov-jdk15on:1.55'
     compile 'org.bouncycastle:bcprov-ext-jdk15on:1.55'
