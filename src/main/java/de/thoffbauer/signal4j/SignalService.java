@@ -45,6 +45,7 @@ import org.whispersystems.signalservice.api.messages.SignalServiceContent;
 import org.whispersystems.signalservice.api.messages.SignalServiceDataMessage;
 import org.whispersystems.signalservice.api.messages.SignalServiceEnvelope;
 import org.whispersystems.signalservice.api.messages.SignalServiceGroup;
+import org.whispersystems.signalservice.api.messages.SignalServiceGroup.Type;
 import org.whispersystems.signalservice.api.messages.multidevice.BlockedListMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.DeviceContact;
 import org.whispersystems.signalservice.api.messages.multidevice.DeviceContactsInputStream;
@@ -60,6 +61,7 @@ import org.whispersystems.signalservice.api.push.exceptions.EncapsulatedExceptio
 import org.whispersystems.signalservice.api.push.exceptions.UnregisteredUserException;
 import org.whispersystems.signalservice.internal.push.SignalServiceProtos.SyncMessage.Request;
 
+import de.thoffbauer.signal4j.exceptions.NoGroupFoundException;
 import de.thoffbauer.signal4j.listener.ConversationListener;
 import de.thoffbauer.signal4j.listener.SecurityExceptionListener;
 import de.thoffbauer.signal4j.store.DataStore;
@@ -252,6 +254,7 @@ public class SignalService {
 		checkRegistered();
 		checkMessageSender();
 		List<SignalServiceAddress> signalServiceAddresses = addresses.stream()
+				.filter(v -> !v.equals(store.getPhoneNumber()))
 				.map(v -> new SignalServiceAddress(v))
 				.collect(Collectors.toList());
 		try {
@@ -446,10 +449,16 @@ public class SignalService {
 				fireGroupUpdate(envelope.getSourceAddress(), group);
 			} else if(groupInfo.getType() == SignalServiceGroup.Type.QUIT) {
 				if(group != null) {
-					group.setActive(false);
+					if(envelope.getSourceAddress().getNumber().equals(store.getPhoneNumber())) {
+						group.setActive(false);
+					}
+					group.getMembers().remove(envelope.getSourceAddress().getNumber());
+					fireGroupUpdate(envelope.getSourceAddress(), group);
 				}
-				fireGroupUpdate(envelope.getSourceAddress(), group);
 			} else {
+				if(group == null) {
+					fireSecurityException(envelope.getSourceAddress(), new NoGroupFoundException("No group known for ID", id));
+				}
 				fireMessage(envelope.getSourceAddress(), dataMessage, group);
 			}
 		} else {
@@ -719,6 +728,22 @@ public class SignalService {
 	 */
 	public DataStore getDataStore() {
 		return store.getDataStore();
+	}
+	
+	/**
+	 * Leaves the group.<br><br>
+	 * <b>Hack:</b> You can use a custom crafted group. This can be useful to leave a group where you lost the store for.
+	 * @param group
+	 * @throws IOException 
+	 */
+	public void leaveGroup(Group group) throws IOException {
+		SignalServiceDataMessage message = SignalServiceDataMessage.newBuilder()
+				.withTimestamp(System.currentTimeMillis())
+				.asGroupMessage(SignalServiceGroup.newBuilder(Type.QUIT)
+						.withId(group.getId().getId())
+						.build())
+				.build();
+		sendMessage(group.getMembers(), message);
 	}
 	
 }

@@ -13,6 +13,11 @@ public class GroupId {
 	}
 	
 	@Override
+	public String toString() {
+		return "GroupId [id=" + Arrays.toString(id) + "]";
+	}
+
+	@Override
 	public int hashCode() {
 		final int prime = 31;
 		int result = 1;
