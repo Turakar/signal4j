@@ -347,7 +347,7 @@ public class SignalService {
 	
 	/**
 	 * Saves the store. As this is done automatically inside the library, 
-	 * you only need to call this if you change sometihng manually.
+	 * you only need to call this if you change something manually.
 	 * @throws IOException
 	 */
 	public void save() throws IOException {
@@ -421,10 +421,11 @@ public class SignalService {
 	}
 
 	private void handleDataMessage(SignalServiceEnvelope envelope, SignalServiceDataMessage dataMessage) throws IOException {
+		Group group = null;
 		if(dataMessage.getGroupInfo().isPresent()) {
 			SignalServiceGroup groupInfo = dataMessage.getGroupInfo().get();
 			GroupId id = new GroupId(groupInfo.getGroupId());
-			Group group = store.getDataStore().getGroup(id);
+			group = store.getDataStore().getGroup(id);
 			if(groupInfo.getType() == SignalServiceGroup.Type.UPDATE) {
 				if(group == null) {
 					group = new Group(id);
@@ -459,11 +460,21 @@ public class SignalService {
 				if(group == null) {
 					fireSecurityException(envelope.getSourceAddress(), new NoGroupFoundException("No group known for ID", id));
 				}
-				fireMessage(envelope.getSourceAddress(), dataMessage, group);
 			}
-		} else {
-			fireMessage(envelope.getSourceAddress(), dataMessage, null);
 		}
+
+		if (dataMessage.isExpirationUpdate() || dataMessage.getBody().isPresent()) {
+			if(group != null) {
+				group.setMessageExpirationTime(dataMessage.getExpiresInSeconds());
+			} else {
+				User user = toUser(envelope.getSourceAddress());
+				user.setMessageExpirationTime(dataMessage.getExpiresInSeconds());
+			}
+		}
+
+
+		fireMessage(envelope.getSourceAddress(), dataMessage,group);
+
 	}
 
 	private void handleSyncMessage(SignalServiceEnvelope envelope, SignalServiceSyncMessage syncMessage)
@@ -742,6 +753,7 @@ public class SignalService {
 				.asGroupMessage(SignalServiceGroup.newBuilder(Type.QUIT)
 						.withId(group.getId().getId())
 						.build())
+				.withExpiration(group.getMessageExpirationTime())
 				.build();
 		sendMessage(group.getMembers(), message);
 	}

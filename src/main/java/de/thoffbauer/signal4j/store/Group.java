@@ -11,6 +11,7 @@ public class Group {
 	private ArrayList<String> members;
 	private String avatarId;
 	private boolean active;
+	private int messageExpirationTime;
 	
 	public Group() {
 		
@@ -67,4 +68,11 @@ public class Group {
 		this.avatarId = avatarId;
 	}
 
+	public int getMessageExpirationTime() {
+		return messageExpirationTime;
+	}
+
+	public void setMessageExpirationTime(int messageExpirationTime) {
+		this.messageExpirationTime = messageExpirationTime;
+	}
 }

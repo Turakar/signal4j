@@ -9,6 +9,7 @@ public class User {
 	private String avatarId;
 	private String color;
 	private boolean blocked = false;
+	private int messageExpirationTime;
 	
 	public User() {
 		
@@ -64,4 +65,11 @@ public class User {
 		this.avatarId = avatarId;
 	}
 
+	public int getMessageExpirationTime() {
+		return messageExpirationTime;
+	}
+
+	public void setMessageExpirationTime(int messageExpirationTime) {
+		this.messageExpirationTime = messageExpirationTime;
+	}
 }
