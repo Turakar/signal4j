@@ -79,11 +79,11 @@ public class SignalService {
 	/**
 	 * Path to main store file. Contains all keys etc.
 	 */
-	public static String STORE_PATH = "store.json";
+	private String STORE_PATH = "store.json";
 	/**
 	 * Folder to save attachments to
 	 */
-	public static String ATTACHMENTS_PATH = "attachments";
+	private String ATTACHMENTS_PATH = "attachments";
 	
 	private static final int PASSWORD_LENGTH = 18;
 	private static final int SIGNALING_KEY_LENGTH = 52;
@@ -120,6 +120,19 @@ public class SignalService {
 		} else {
 			store = new JsonSignalStore();
 		}
+	}
+
+	/**
+	 * Create a new instance but give the option to specify a path to store.json and the attachments folder.
+	 * @param storePath the path to store.json
+	 * @param attachmentsPath the path to the attachments folder
+	 * @throws IOException can be thrown while loading the store
+	 */
+	public SignalService(String storePath, String attachmentsPath) throws IOException {
+		this.STORE_PATH = storePath;
+		this.ATTACHMENTS_PATH = attachmentsPath;
+
+		this();
 	}
 	
 	/**
