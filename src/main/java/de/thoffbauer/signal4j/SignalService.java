@@ -79,11 +79,11 @@ public class SignalService {
 	/**
 	 * Path to main store file. Contains all keys etc.
 	 */
-	private String STORE_PATH = "store.json";
+	private final String STORE_PATH;
 	/**
 	 * Folder to save attachments to
 	 */
-	private String ATTACHMENTS_PATH = "attachments";
+	private final String ATTACHMENTS_PATH;
 	
 	private static final int PASSWORD_LENGTH = 18;
 	private static final int SIGNALING_KEY_LENGTH = 52;
@@ -105,13 +105,19 @@ public class SignalService {
 	private ArrayList<SecurityExceptionListener> securityExceptionListeners = new ArrayList<>();
 	
 	/**
-	 * Create a new instance. Will automatically load a store file if existent.
+	 * Create a new instance. This will load storePath as the data store if it exists, or create it if it doesn't. The attachments folder location path is also set via attachmentsPath.
+	 * @param storePath the path to the data store, ending in .json
+	 * @param attachmentsPath the path to the attachments folder, where attachments, avatars and general media is stored
 	 * @throws IOException can be thrown while loading the store
 	 */
-	public SignalService() throws IOException {
+	public SignalService(String storePath, String attachmentsPath) throws IOException {
 		// Add bouncycastle
 		Security.insertProviderAt(new org.bouncycastle.jce.provider.BouncyCastleProvider(), 1);
 		
+		// Set location of store.json and attachments folder from arguments
+		this.STORE_PATH = storePath;
+		this.ATTACHMENTS_PATH = attachmentsPath;
+
 		File storeFile = new File(STORE_PATH);
 		if(storeFile.isFile()) {
 			store = JsonSignalStore.load(storeFile);
@@ -123,16 +129,11 @@ public class SignalService {
 	}
 
 	/**
-	 * Create a new instance but give the option to specify a path to store.json and the attachments folder.
-	 * @param storePath the path to store.json
-	 * @param attachmentsPath the path to the attachments folder
+	 * Create a new instance. No arguments will cause this constructor to set the store path to "store.json" and the attachments folder to "attachments". If "store.json" does not exist, it will be created.
 	 * @throws IOException can be thrown while loading the store
 	 */
-	public SignalService(String storePath, String attachmentsPath) throws IOException {
-		this.STORE_PATH = storePath;
-		this.ATTACHMENTS_PATH = attachmentsPath;
-
-		this();
+	public SignalService() throws IOException {
+		this("store.json", "attachments");
 	}
 	
 	/**
